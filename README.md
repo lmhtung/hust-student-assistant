@@ -1,2 +1,2 @@
-# mycodex
-My "codex" ^^
+# OOAD - Hust Student Assistant
+Nocodex Nochatgpt Justme
