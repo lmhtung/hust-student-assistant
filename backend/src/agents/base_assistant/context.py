@@ -1,5 +1,7 @@
-""" Context for the base assistant agent """
+"""Context for the base assistant agent"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass
 from uuid import UUID
 

@@ -1,0 +1,13 @@
+# Secrets nằm trong backend/.env hoặc biến môi trường, không ghi vào YAML.
+llm:
+  model_name: qwen35-27b-fp8
+  api_base_url: http://localhost:8000/v1
+  max_tokens: 2048
+  temperature: 0.7
+  enable_thinking: false
+mcp_url: http://127.0.0.1:8002/mcp
+history_path: data/conversations.sqlite3
+max_tool_rounds: 5
+max_tool_calls: 12
+request_timeout: 120
+max_concurrent_requests: 8

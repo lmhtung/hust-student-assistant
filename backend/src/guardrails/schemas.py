@@ -1,5 +1,7 @@
-""" Schemas for guardrails."""
+"""Schemas for guardrails."""
+
 from __future__ import annotations
+
 from enum import Enum
 from typing import Literal
 
@@ -19,21 +21,4 @@ class GuardrailAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["allow", "block", "clarify"]
-    categories: list[GuardrailCategory] = Field(
-        default_factory=list,
-    )
-    user_message: str | None = Field(
-        default=None,
-        max_length=500,
-        description=(
-            "Thông báo ngắn cho người dùng khi từ chối "
-            "hoặc yêu cầu làm rõ; không chứa suy luận nội bộ."
-        ),
-    )
-
-
-class GuardrailResult(BaseModel):
-    """Kết quả nội bộ để ghi nhận policy đã sử dụng."""
-
-    assessment: GuardrailAssessment
-    policy_version: str
+    categories: list[GuardrailCategory] = Field(default_factory=list)
