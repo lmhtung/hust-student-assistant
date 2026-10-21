@@ -47,8 +47,9 @@ class ConversationStore(Protocol):
 
 
 class Conversations:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, max_messages: int = 24):
         self.path = Path(path)
+        self.max_messages = max_messages
 
     async def initialize(self) -> None:
         # SQLite chạy trên worker thread; không chặn event loop của FastAPI.
@@ -122,7 +123,12 @@ class Conversations:
             db.execute("BEGIN IMMEDIATE")
             updated = db.execute(
                 "UPDATE conversations SET history=? WHERE id=? AND lease=? AND busy_until>?",
-                (json.dumps(history[-24:], ensure_ascii=False), session_id, lease, time.time()),
+                (
+                    json.dumps(history[-self.max_messages :], ensure_ascii=False),
+                    session_id,
+                    lease,
+                    time.time(),
+                ),
             )
             if updated.rowcount != 1:
                 db.rollback()

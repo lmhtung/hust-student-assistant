@@ -1,6 +1,6 @@
 """App factory: chỉ wiring dependencies, không chứa nghiệp vụ chat hay prompt.
 
-Chạy từ backend/: python -m uvicorn src.main:app --port 8080.
+Chạy từ backend/: python -m src.main (đọc host/port từ config.yaml).
 """
 
 from contextlib import asynccontextmanager
@@ -26,7 +26,11 @@ def create_app(
     async def lifespan(app):
         config = settings or get_settings()
         app.state.settings = config
-        store = conversations if conversations is not None else Conversations(config.history_path)
+        store = (
+            conversations
+            if conversations is not None
+            else Conversations(config.short_memory.history_path, config.short_memory.max_messages)
+        )
         await store.initialize()
         llm = None
         if student_assistant is None:
@@ -49,9 +53,27 @@ def create_app(
     @app.get("/health")
     async def health():
         # Liveness; không cam kết LLM/MCP/database bên ngoài đang sẵn sàng.
-        return {"status": "ok", "manager_assistant": "not_implemented"}
+        return {"status": "ok", "admin_assistant": "not_implemented"}
 
     return app
 
 
 app = create_app()
+
+
+def main() -> None:
+    """Uvicorn CLI không tự đọc YAML; entrypoint này áp dụng nhóm app."""
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(
+        "src.main:app",
+        host=settings.app.host,
+        port=settings.app.port,
+        reload=settings.app.reload,
+        log_level=settings.app.log_level,
+    )
+
+
+if __name__ == "__main__":
+    main()

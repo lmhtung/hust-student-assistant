@@ -62,15 +62,15 @@ class AcademicTools:
         token = issue_mcp_token(self.user, self.settings)
         # Credentials chỉ nằm ở HTTP header, tuyệt đối không nằm trong tool arguments.
         async with httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {token}"}, timeout=20
+            headers={"Authorization": f"Bearer {token}"}, timeout=self.settings.mcp.timeout
         ) as http:
-            async with streamable_http_client(self.settings.mcp_url, http_client=http) as (
+            async with streamable_http_client(self.settings.mcp.url, http_client=http) as (
                 read,
                 write,
                 _,
             ):
                 async with ClientSession(read, write) as session:
-                    with anyio.fail_after(20):
+                    with anyio.fail_after(self.settings.mcp.timeout):
                         await session.initialize()
                         result = await session.list_tools()
                     self.schemas = {
@@ -105,7 +105,7 @@ class AcademicTools:
         validate(arguments, self.schemas[name])
         if self.session is None:
             raise RuntimeError("MCP session is not connected")
-        with anyio.fail_after(20):
+        with anyio.fail_after(self.settings.mcp.timeout):
             result = await self.session.call_tool(name, arguments)
         if result.isError:
             return {"error": "academic_tool_failed", "hint": "Kiểm tra tham số hoặc hỏi lại."}

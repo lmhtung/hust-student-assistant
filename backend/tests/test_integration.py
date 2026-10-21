@@ -74,39 +74,60 @@ def test_chat_uses_actual_mcp_process(settings, tmp_path):
                     pass
                 time.sleep(0.05)
         assert ready, "MCP server did not become ready"
-        settings = settings.model_copy(update={"mcp_url": url})
+        settings = settings.model_copy(update={"mcp": settings.mcp.model_copy(update={"url": url})})
         llm = LLMClient(settings.llm)
         # Client chưa gửi request, close synchronous transport resources bằng TestClient sau.
         original_http = llm.http
         calls = []
 
+        def model_stream(deltas, finish_reason):
+            frames = [{"choices": [{"index": 0, "delta": delta}]} for delta in deltas]
+            frames.append({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
+            body = "".join(f"data: {json.dumps(frame, ensure_ascii=False)}\n\n" for frame in frames)
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=body + "data: [DONE]\n\n",
+            )
+
         async def respond(request):
             body = json.loads(request.content)
             calls.append(body)
             if body.get("response_format"):
+                assert body["stream"] is False
                 message = {"role": "assistant", "content": '{"decision":"allow","categories":[]}'}
-            elif body["messages"][-1]["role"] == "tool":
+                return httpx.Response(
+                    200, json={"choices": [{"finish_reason": "stop", "message": message}]}
+                )
+            assert body["stream"] is True
+            if body["messages"][-1]["role"] == "tool":
                 data = json.loads(body["messages"][-1]["content"])
                 assert data["course"]["credits"] == 3
-                message = {"role": "assistant", "content": "ET101 có 3 tín chỉ (dữ liệu demo)."}
-            else:
-                assert len(body["tools"]) == 7
-                message = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "integration-call",
-                            "type": "function",
-                            "function": {
-                                "name": "get_course",
-                                "arguments": '{"course_code":"ET101"}',
-                            },
-                        }
+                return model_stream(
+                    [
+                        {"content": "ET101 có "},
+                        {"content": "3 tín chỉ "},
+                        {"content": "(dữ liệu demo)."},
                     ],
-                }
-            return httpx.Response(
-                200, json={"choices": [{"finish_reason": "stop", "message": message}]}
+                    "stop",
+                )
+            assert len(body["tools"]) == 7
+            return model_stream(
+                [
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "integration-call",
+                                "type": "function",
+                                "function": {"name": "get_course", "arguments": '{"course_'},
+                            }
+                        ],
+                    },
+                    {"tool_calls": [{"index": 0, "function": {"arguments": 'code":"ET101"}'}}]},
+                ],
+                "tool_calls",
             )
 
         llm.http = httpx.AsyncClient(
@@ -127,6 +148,7 @@ def test_chat_uses_actual_mcp_process(settings, tmp_path):
                 assert events[-2][1]["response"] == "ET101 có 3 tín chỉ (dữ liệu demo)."
                 assert events[-1][1]["ok"] is True
                 assert len(calls) == 4  # input safety, model/tool decision, answer, output safety
+                assert [call["stream"] for call in calls] == [False, True, True, False]
             finally:
                 client.portal.call(llm.aclose)
                 client.portal.call(original_http.aclose)

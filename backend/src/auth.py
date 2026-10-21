@@ -1,5 +1,5 @@
 """JWT của hai chặng web→assistant và assistant→MCP.
-
+<base64-encoded header>.<base64-encoded payload>.<base64-encoded signature>
 Module này không phụ thuộc FastAPI; script, agent client và API dùng chung.
 """
 
@@ -12,10 +12,11 @@ from src.schemas.auth import CurrentUser
 
 
 def verify_web_token(token: str, settings: Settings) -> CurrentUser:
+    """Kiểm tra JWT và chỉ chấp nhận role student/admin qua schema CurrentUser."""
     claims = jwt.decode(
         token,
         settings.auth_secret.get_secret_value(),
-        algorithms=["HS256"],
+        algorithms=["HS256"],  # HMAC SHA256 - HS256
         audience="assistant-api",
         issuer="web-backend",
         options={"require": ["sub", "role", "permissions", "exp", "iat", "iss", "aud"]},

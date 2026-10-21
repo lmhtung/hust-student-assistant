@@ -13,9 +13,7 @@ from src.config import get_settings
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--user", default="demo-et")
-    parser.add_argument(
-        "--role", choices=["student", "admin", "manager", "lecturer"], default="student"
-    )
+    parser.add_argument("--role", choices=["student", "admin"], default="student")
     args = parser.parse_args()
     now = int(time.time())
     print(
@@ -23,7 +21,7 @@ if __name__ == "__main__":
             {
                 "sub": args.user,
                 "role": args.role,
-                "permissions": ["academic:read"],
+                "permissions": ["academic:read"] if args.role == "student" else [],
                 "iss": "web-backend",
                 "aud": "assistant-api",
                 "iat": now,

@@ -1,14 +1,11 @@
-"""State chỉ sống trong một lượt graph; không lưu JWT, secrets hay suy luận."""
+"""Student dùng state chung và bổ sung bản nháp, bộ đếm tra cứu của graph."""
 
-from typing import TypedDict
-
-from src.agents.base_assistant.agent import AnswerStatus
+from src.agents.base_assistant.state import AgentState
 
 
-class StudentState(TypedDict):
-    messages: list[dict]
+class StudentState(AgentState):
+    """Chỉ sống trong một lượt; bản nháp không được đưa vào event gửi client."""
+
     draft: str
-    response: str
-    status: AnswerStatus
     tool_rounds: int
     tool_calls: int

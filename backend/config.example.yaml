@@ -1,0 +1,51 @@
+# Sao chép file này thành config.yaml và chỉnh cho môi trường của bạn.
+# Biến môi trường > .env > config.yaml > giá trị mặc định trong src/config.py.
+# sk-1234 là API key mẫu của model server local; có thể ghi đè qua .env.
+# Hai khóa ký JWT dùng ASSISTANT_AUTH_SECRET/ASSISTANT_MCP_SECRET trong .env.
+
+app:
+  host: 0.0.0.0
+  port: 8023
+  reload: false # Chỉ bật trong lúc phát triển.
+  log_level: info
+  request_timeout: 120 # Toàn bộ một lượt chat, gồm cả chờ slot; đơn vị giây.
+  max_concurrent_requests: 8 # Giới hạn trên mỗi process.
+
+ui:
+  host: 0.0.0.0
+  port: 5173
+  # ui/scripts/serve.mjs đọc nhóm này; backend không tự khởi chạy UI.
+
+llm:
+  api_key: sk-1234 # Override: ASSISTANT_LLM__API_KEY.
+  base_url: http://localhost:8024/v1
+  default_model: qwen3-8b-fp8 # Phải khớp model được vLLM phục vụ.
+  temperature: 0.0
+  max_tokens: 3000
+  enable_thinking: false
+  send_chat_template_kwargs: true # Tắt nếu server không hỗ trợ tham số Qwen này.
+
+embeddings:
+  enabled: false # Chưa triển khai; cấu hình từ chối bật true ở thời điểm này.
+  api_key: sk-1234
+  base_url: http://localhost:8026/v1 # Endpoint dự kiến: POST /v1/embeddings.
+  model: qwen3-embedding-4b
+  max_input_tokens: 31950 # Giới hạn dự kiến; chưa có client cắt text/tạo vector.
+
+mcp:
+  url: http://127.0.0.1:8002/mcp
+  timeout: 20 # Timeout HTTP, khởi tạo session và gọi từng tool; đơn vị giây.
+
+agents:
+  # Giới hạn vòng lặp; role student/admin vẫn được quyết định bằng JWT và code.
+  max_tool_rounds: 5
+  max_tool_calls: 12
+
+short_memory:
+  enabled: false # true: đưa lịch sử hội thoại trước đó vào context của model.
+  history_path: data/conversations.sqlite3 # Đường dẫn tính từ thư mục backend/.
+  max_messages: 24 # Cửa sổ lưu hội thoại; 24 messages tương ứng 12 cặp hỏi/đáp.
+  # Tắt memory vẫn lưu transcript và giữ owner/lease; không xóa dữ liệu học vụ.
+
+long_memory:
+  enabled: false # Chưa triển khai; chưa có PostgreSQL/vector store/rewrite/HyDE.

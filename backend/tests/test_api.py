@@ -7,8 +7,8 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from src.agents.base_assistant.agent import AgentResult
 from src.main import create_app
+from src.schemas.agent import AgentResult
 
 
 def headers(settings, user="demo-et", role="student", permissions=None, **overrides):
@@ -70,11 +70,16 @@ def test_auth_and_identity_cannot_come_from_body_or_headers(settings):
         )
 
 
-@pytest.mark.parametrize("role,status", [("admin", 501), ("manager", 501), ("lecturer", 403)])
-def test_role_routing_and_manager_placeholder(settings, role, status):
+@pytest.mark.parametrize("path", ["/api/v1/chat", "/api/v1/chat/stream"])
+@pytest.mark.parametrize(
+    "role,status", [("admin", 501), ("manager", 401), ("lecturer", 401), ("unknown", 401)]
+)
+def test_only_supported_roles_reach_assistant_routing(settings, path, role, status):
     with TestClient(create_app(settings, FakeAssistant())) as client:
         response = client.post(
-            "/api/v1/chat/stream", json={"message": "hi"}, headers=headers(settings, role=role)
+            path,
+            json={"message": "hi"},
+            headers=headers(settings, role=role, permissions=[]),
         )
         assert response.status_code == status
         assert "text/event-stream" not in response.headers["content-type"]
@@ -175,7 +180,12 @@ def test_stream_timeout_cancels_agent_and_releases_lease(settings):
             finally:
                 cancelled.append(True)
 
-    app = create_app(settings.model_copy(update={"request_timeout": 0.03}), SlowAssistant())
+    app = create_app(
+        settings.model_copy(
+            update={"app": settings.app.model_copy(update={"request_timeout": 0.03})}
+        ),
+        SlowAssistant(),
+    )
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/chat/stream", json={"message": "hi"}, headers=headers(settings)
@@ -239,7 +249,7 @@ def test_lost_lease_never_emits_answer(settings):
         async def commit(self, *args):
             raise ConversationLeaseLost()
 
-    store = LostLeaseStore(settings.history_path)
+    store = LostLeaseStore(settings.short_memory.history_path)
     with TestClient(create_app(settings, FakeAssistant(), store)) as client:
         response = client.post(
             "/api/v1/chat/stream", json={"message": "hi"}, headers=headers(settings)
@@ -257,7 +267,7 @@ def test_storage_unavailable_before_stream_is_http_error(settings):
             raise RuntimeError("private database connection string")
 
     with TestClient(
-        create_app(settings, FakeAssistant(), BrokenStore(settings.history_path))
+        create_app(settings, FakeAssistant(), BrokenStore(settings.short_memory.history_path))
     ) as client:
         response = client.post(
             "/api/v1/chat/stream", json={"message": "hi"}, headers=headers(settings)

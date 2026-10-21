@@ -1,45 +1,87 @@
 """HTTP client cho API Chat Completions của vLLM; không gọi model khi import.
 
-Không stream token thô: agent phải kiểm tra toàn bộ câu trả lời trước khi API
-phát nó bằng SSE. Client này không biết danh tính sinh viên hoặc secrets MCP.
+complete() phục vụ guardrails; astream() trả chunks nội bộ cho graph. API chỉ
+phát câu trả lời qua SSE sau khi agent kiểm tra toàn bộ nội dung. Client không
+biết danh tính sinh viên hoặc secrets MCP.
 """
 
-from typing import Literal
+import json
+from collections.abc import AsyncIterator, Sequence
 
+import anyio
 import httpx
-from pydantic import BaseModel, Field, field_validator
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    convert_to_openai_messages,
+)
 
 from src.config import LLMSettings
+from src.schemas.llm import ModelMessage
+from src.services.llms.stream import stream_chunks
 
 
-class ToolFunction(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    arguments: str
+def _message_from_wire(message: ModelMessage) -> AIMessage:
+    """Dùng JSON hoàn chỉnh; không sửa hộ arguments bị thiếu dấu đóng."""
+    tool_calls = []
+    invalid_tool_calls = []
+    for call in message.tool_calls:
+        try:
+            arguments = json.loads(call.function.arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("Tool arguments must be an object")
+        except ValueError:
+            # Agent gửi ToolMessage lỗi để model sửa tham số; không thực thi.
+            invalid_tool_calls.append(
+                {
+                    "name": call.function.name,
+                    "args": call.function.arguments,
+                    "id": call.id,
+                    "error": "invalid_tool_arguments",
+                    "type": "invalid_tool_call",
+                }
+            )
+        else:
+            tool_calls.append(
+                {
+                    "name": call.function.name,
+                    "args": arguments,
+                    "id": call.id,
+                    "type": "tool_call",
+                }
+            )
+    return AIMessage(
+        content=message.content or "", tool_calls=tool_calls, invalid_tool_calls=invalid_tool_calls
+    )
 
 
-class ToolCall(BaseModel):
-    id: str = Field(min_length=1, max_length=256)
-    type: Literal["function"] = "function"
-    function: ToolFunction
+def message_from_chunk(chunk: AIMessageChunk) -> AIMessage:
+    """Kiểm tra kết quả sau khi graph ghép hết stream bằng chunk + chunk.
 
-
-class ModelMessage(BaseModel):
-    role: Literal["assistant"] = "assistant"
-    content: str | None = None
-    tool_calls: list[ToolCall] = Field(default_factory=list)
-
-    @field_validator("tool_calls", mode="before")
-    @classmethod
-    def normalize_null_calls(cls, value):
-        # Nhiều model server trả tool_calls: null khi chỉ trả văn bản.
-        return [] if value is None else value
+    AIMessageChunk tự parse JSON chưa đầy đủ. Vì vậy chỉ đọc raw tool_call_chunks
+    và kiểm tra lại schema/JSON hoàn chỉnh trước khi cho phép agent gọi tool.
+    """
+    message = ModelMessage.model_validate(
+        {
+            "content": chunk.content,
+            "tool_calls": [
+                {
+                    "id": call.get("id"),
+                    "function": {"name": call.get("name"), "arguments": call.get("args")},
+                }
+                for call in chunk.tool_call_chunks
+            ],
+        }
+    )
+    return _message_from_wire(message)
 
 
 class LLMClient:
     def __init__(self, settings: LLMSettings):
         self.settings = settings
         self.http = httpx.AsyncClient(
-            base_url=settings.api_base_url.rstrip("/") + "/",
+            base_url=settings.base_url.rstrip("/") + "/",
             headers={"Authorization": f"Bearer {settings.api_key.get_secret_value()}"},
             timeout=httpx.Timeout(60, connect=10),
         )
@@ -47,13 +89,32 @@ class LLMClient:
     async def aclose(self) -> None:
         await self.http.aclose()
 
-    async def complete(
-        self, messages: list[dict], tools: list[dict] | None = None, *, assessment: bool = False
-    ) -> ModelMessage:
+    def _build_payload(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: list[dict] | None = None,
+        *,
+        assessment: bool = False,
+        stream: bool = False,
+    ) -> dict:
+        wire_messages = convert_to_openai_messages(messages)
+        for message, wire_message in zip(messages, wire_messages, strict=True):
+            if isinstance(message, AIMessage) and message.invalid_tool_calls:
+                # LangChain converter chỉ gửi tool_calls hợp lệ. Giữ lời gọi sai
+                # trong HTTP history để ToolMessage lỗi vẫn khớp tool_call_id.
+                calls = wire_message.setdefault("tool_calls", [])
+                for call in message.invalid_tool_calls:
+                    calls.append(
+                        {
+                            "id": call["id"],
+                            "type": "function",
+                            "function": {"name": call["name"], "arguments": call["args"]},
+                        }
+                    )
         payload = {
-            "model": self.settings.model_name,
-            "messages": messages,
-            "stream": False,
+            "model": self.settings.default_model,
+            "messages": wire_messages,
+            "stream": stream,
             "temperature": 0 if assessment else self.settings.temperature,
             "max_tokens": min(512, self.settings.max_tokens)
             if assessment
@@ -66,6 +127,17 @@ class LLMClient:
             payload["tool_choice"] = "auto"
         if self.settings.send_chat_template_kwargs:
             payload["chat_template_kwargs"] = {"enable_thinking": self.settings.enable_thinking}
+        return payload
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: list[dict] | None = None,
+        *,
+        assessment: bool = False,
+    ) -> AIMessage:
+        """Lấy trọn câu trả lời; guardrails dùng chế độ này để phân loại JSON."""
+        payload = self._build_payload(messages, tools, assessment=assessment)
         response = await self.http.post("chat/completions", json=payload)
         response.raise_for_status()
         data = response.json()
@@ -75,7 +147,25 @@ class LLMClient:
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise ValueError("Model response thiếu choices hợp lệ")
         choice = choices[0]
-        if choice.get("finish_reason") == "length":
-            raise ValueError("Model response bị cắt vì giới hạn token")
-        # Các field phụ, gồm reasoning_content, không được chuyển vào graph/SSE.
-        return ModelMessage.model_validate(choice.get("message"))
+        if choice.get("finish_reason") not in {None, "stop", "tool_calls"}:
+            raise ValueError("Model response chưa hoàn tất câu trả lời")
+        message = ModelMessage.model_validate(choice.get("message"))
+        # Không gắn raw response vào additional_kwargs: reasoning và metadata
+        # ngoài schema không được chuyển vào state hoặc SSE.
+        return _message_from_wire(message)
+
+    async def astream(
+        self, messages: Sequence[BaseMessage], tools: list[dict] | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        """Nhận chunks nội bộ; caller phải ghép hết và kiểm tra trước khi công bố."""
+        payload = self._build_payload(messages, tools, stream=True)
+        async with self.http.stream("POST", "chat/completions", json=payload) as response:
+            try:
+                response.raise_for_status()
+                async for chunk in stream_chunks(response):
+                    yield chunk
+            finally:
+                # AnyIO timeout hủy lặp lại ở mỗi await. Đóng trong shield để
+                # socket được dọn trước khi HTTPX thoát context (lần đóng sau là no-op).
+                with anyio.CancelScope(shield=True):
+                    await response.aclose()

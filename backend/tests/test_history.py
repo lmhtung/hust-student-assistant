@@ -87,8 +87,9 @@ async def test_cancellation_during_acquire_releases_eventually_created_lease(tmp
     await store.release(session, lease)
 
 
-async def test_history_has_a_bounded_context_window(tmp_path):
-    store = Conversations(tmp_path / "history.sqlite3")
+@pytest.mark.parametrize("max_messages", [4, 24])
+async def test_history_has_a_bounded_context_window(tmp_path, max_messages):
+    store = Conversations(tmp_path / "history.sqlite3", max_messages=max_messages)
     await store.initialize()
     user = CurrentUser(user_id="one", role="student")
     session = uuid4()
@@ -97,5 +98,5 @@ async def test_history_has_a_bounded_context_window(tmp_path):
     await store.commit(session, lease, history)
     await store.release(session, lease)
     lease, remembered = await store.acquire(session, user, 10)
-    assert remembered == history[-24:]
+    assert remembered == history[-max_messages:]
     await store.release(session, lease)

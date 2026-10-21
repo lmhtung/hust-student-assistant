@@ -1,4 +1,4 @@
-"""Schemas for guardrails."""
+"""Cấu trúc dữ liệu cho kết quả kiểm tra nội dung đầu vào và đầu ra."""
 
 from __future__ import annotations
 

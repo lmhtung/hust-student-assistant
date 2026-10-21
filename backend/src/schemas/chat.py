@@ -5,13 +5,13 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from src.agents.base_assistant.agent import AnswerStatus
+from src.schemas.agent import AnswerStatus
 
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     session_id: UUID = Field(default_factory=uuid4)
-    message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)]
+    message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 
 
 class ChatResponse(BaseModel):

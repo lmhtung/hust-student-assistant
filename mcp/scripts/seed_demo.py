@@ -1,7 +1,7 @@
 """Tạo database GIẢ LẬP, không phải dữ liệu của HUST hay giảng viên thật.
 
-Chạy từ mcp/: python scripts/seed_demo.py. Script từ chối ghi đè file đã có;
-chỉ script này có quyền ghi, AcademicRepository runtime luôn mở mode=ro.
+Chạy từ mcp/: python scripts/seed_demo.py. Script từ chối ghi đè file đã có.
+Web demo có adapter ghi riêng; AcademicRepository runtime luôn mở mode=ro.
 """
 
 import argparse

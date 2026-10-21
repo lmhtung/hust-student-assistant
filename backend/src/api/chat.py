@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from src.agents.factory import ManagerAssistantUnavailable
+from src.agents.factory import AdminAssistantUnavailable
 from src.api.conversations import ConversationBusy, ConversationForbidden
 from src.api.dependencies import get_current_user
 from src.api.service import ChatService, PreparedTurn
@@ -21,8 +21,8 @@ async def _prepare(service: ChatService, user: CurrentUser, body: ChatRequest) -
     # Phân quyền và lỗi lưu trữ phải được xử lý trước khi SSE gửi headers 200.
     try:
         return await service.prepare(user, body.session_id, body.message)
-    except ManagerAssistantUnavailable:
-        raise HTTPException(501, "Manager assistant chưa được triển khai") from None
+    except AdminAssistantUnavailable:
+        raise HTTPException(501, "Admin assistant chưa được triển khai") from None
     except (PermissionError, ConversationForbidden):
         raise HTTPException(403, "Assistant or conversation access denied") from None
     except ConversationBusy:

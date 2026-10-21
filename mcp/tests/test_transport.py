@@ -102,7 +102,7 @@ async def test_transport_suggests_valid_schedule_without_writing(repository):
         (token(aud="other-service"), 401),
         (token(exp=int(time.time()) + 301), 401),
         (token(iat=int(time.time()) - 200, exp=int(time.time()) - 1), 401),
-        (token(role="manager"), 403),
+        (token(role="admin"), 403),
         (token(permissions=[]), 403),
     ],
 )

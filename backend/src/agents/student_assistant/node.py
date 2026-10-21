@@ -1,14 +1,14 @@
 """Các bước model/tool/output của graph; không có quyền ghi học vụ."""
 
 import json
+from collections.abc import Awaitable, Callable
 
 from jsonschema import ValidationError
+from langchain_core.messages import AIMessage, ToolMessage
 
-from src.agents.base_assistant.agent import StatusEmitter
+from src.agents.base_assistant.events import StatusEmitter
 from src.agents.student_assistant.state import StudentState
 from src.config import Settings
-from src.guardrails.policy import SAFE_CLARIFICATION, SAFE_REFUSAL, Guardrails
-from src.services.llms.client import LLMClient
 from src.services.mcp.mcp import AcademicTools
 
 SYSTEM_PROMPT = """Bạn là student-assistant nói tiếng Việt, thân thiện và chính xác.
@@ -30,62 +30,69 @@ LIMIT_MESSAGE = (
     "Mình đã đạt giới hạn tra cứu cho lượt này. Bạn hãy thu hẹp số học phần "
     "hoặc yêu cầu cụ thể hơn để mình tiếp tục hỗ trợ."
 )
+INVALID_ARGUMENTS = {
+    "error": "invalid_tool_arguments",
+    "hint": "Sửa tham số theo schema.",
+}
 
 
 class StudentNodes:
     def __init__(
         self,
-        llm: LLMClient,
+        generate: Callable[..., Awaitable[AIMessage]],
         tools: AcademicTools,
-        guardrails: Guardrails,
         settings: Settings,
         emit: StatusEmitter,
     ):
-        self.llm = llm
+        # Base cung cấp hàm sinh nội dung: node không phải tự quản lý chunks.
+        self.generate = generate
         self.tools = tools
-        self.guardrails = guardrails
         self.settings = settings
         self.emit = emit
 
     async def model(self, state: StudentState) -> dict:
         await self.emit({"stage": "thinking"})
-        message = await self.llm.complete(state["messages"], tools=self.tools.definitions())
+        message = await self.generate(state["messages"], tools=self.tools.definitions())
         return {
-            "messages": state["messages"] + [message.model_dump(exclude_none=True)],
-            "draft": message.content or "",
+            # add_messages trong AgentState tự ghép vào lịch sử và giữ message ID.
+            "messages": [message],
+            "draft": message.text,
         }
 
     def after_model(self, state: StudentState) -> str:
-        calls = state["messages"][-1].get("tool_calls", [])
+        message = state["messages"][-1]
+        calls = message.tool_calls + message.invalid_tool_calls
         if not calls:
             return "output"
         if (
-            state["tool_rounds"] >= self.settings.max_tool_rounds
-            or state["tool_calls"] + len(calls) > self.settings.max_tool_calls
+            state["tool_rounds"] >= self.settings.agents.max_tool_rounds
+            or state["tool_calls"] + len(calls) > self.settings.agents.max_tool_calls
         ):
             return "budget"
         return "tools"
 
     async def execute_tools(self, state: StudentState) -> dict:
         await self.emit({"stage": "using_tools"})
-        messages = list(state["messages"])
-        calls = messages[-1]["tool_calls"]
+        messages: list[ToolMessage] = []
+        message = state["messages"][-1]
+        calls = message.tool_calls + message.invalid_tool_calls
         # Tuần tự để kết quả có thứ tự xác định và không gây burst đến database.
         for call in calls:
-            try:
-                arguments = json.loads(call["function"]["arguments"])
-                if not isinstance(arguments, dict):
-                    raise ValueError("Tool arguments must be an object")
-                result = await self.tools.call(call["function"]["name"], arguments)
-            except (ValueError, ValidationError):
-                # Không trả nguyên exception vì nó có thể chứa dữ liệu nhạy cảm.
-                result = {"error": "invalid_tool_arguments", "hint": "Sửa tham số theo schema."}
+            if call["type"] == "invalid_tool_call":
+                # JSON lỗi/args không phải object: trả lỗi để model tự sửa,
+                # không thực thi tool nhưng vẫn tính vào ngân sách lượt gọi.
+                result = INVALID_ARGUMENTS
+            else:
+                try:
+                    result = await self.tools.call(call["name"], call["args"])
+                except (ValueError, ValidationError):
+                    # Không đưa exception chứa tham số hoặc dữ liệu riêng vào context.
+                    result = INVALID_ARGUMENTS
             messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": json.dumps(result, ensure_ascii=False),
-                }
+                ToolMessage(
+                    content=json.dumps(result, ensure_ascii=False),
+                    tool_call_id=call["id"],
+                )
             )
         return {
             "messages": messages,
@@ -94,14 +101,9 @@ class StudentNodes:
         }
 
     async def output(self, state: StudentState) -> dict:
-        await self.emit({"stage": "checking_output"})
+        """Chốt kết quả graph; BaseAssistant kiểm tra an toàn trước khi trả ra ngoài."""
         if not state["draft"].strip():
             return {"response": LIMIT_MESSAGE, "status": "limited"}
-        assessment = await self.guardrails.assess(state["draft"], "output")
-        if assessment.decision == "block":
-            return {"response": SAFE_REFUSAL, "status": "blocked"}
-        if assessment.decision == "clarify":
-            return {"response": SAFE_CLARIFICATION, "status": "clarification_required"}
         return {"response": state["draft"], "status": "answered"}
 
     async def budget(self, state: StudentState) -> dict:
